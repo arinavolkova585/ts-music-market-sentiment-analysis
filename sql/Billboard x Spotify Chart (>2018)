@@ -1,0 +1,57 @@
+CREATE TEMP FUNCTION canon(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\([^)]*\)|\[[^\]]*\]', ' '),
+        r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '
+      ),
+      r'[^a-z0-9]+', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+WITH b AS (
+  SELECT song, artist, MIN(peak_rank) as peak_rank, COUNT(*) AS total_weeks, canon(song) AS k 
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
+  WHERE artist LIKE '%Taylor Swift%'
+  GROUP BY song, artist
+), 
+sp AS (
+  SELECT song, MIN(rank) as sp_peak_rank, COUNT(*) as sp_total_weeks, canon(song) AS k 
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
+  WHERE artist LIKE '%Taylor Swift%'
+  GROUP BY song
+),
+s AS (
+  SELECT canon(song) AS k, MIN(date) as release_date
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.taylorswift_lyrics_and_sentiment_analysis`
+  GROUP BY canon(song)
+),
+deduped AS (
+  SELECT
+    b.song,
+    b.peak_rank,
+    b.total_weeks,
+    sp.sp_peak_rank,
+    sp.sp_total_weeks,
+    s.release_date
+  FROM b
+  LEFT JOIN sp ON b.k = sp.k
+  LEFT JOIN s ON b.k = s.k
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY b.song
+    ORDER BY (sp.sp_peak_rank IS NOT NULL) DESC
+  ) = 1
+)
+SELECT
+  song,
+  peak_rank,
+  total_weeks,
+  sp_peak_rank,
+  sp_total_weeks,
+  release_date, 
+  sp_peak_rank - peak_rank AS us_vs_global_divergence
+FROM deduped
+WHERE EXTRACT(YEAR FROM release_date) >= 2018
+ORDER BY peak_rank
