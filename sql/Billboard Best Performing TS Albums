@@ -1,0 +1,43 @@
+CREATE TEMP FUNCTION canon(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\([^)]*\)|\[[^\]]*\]', ' '),
+        r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '
+      ),
+      r'[^a-z0-9]+', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+WITH b AS (
+  SELECT song, artist, MIN(peak_rank) as peak_rank, COUNT(*) AS total_weeks, canon(song) AS k 
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
+  WHERE artist LIKE '%Taylor Swift%'
+  GROUP BY song, artist
+), 
+s AS (
+  SELECT song, album_name, canon(song) AS k 
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.taylorswift_lyrics_and_sentiment_analysis`
+),
+deduped AS (
+  SELECT
+    b.song,
+    b.peak_rank,
+    b.total_weeks,
+    s.album_name
+  FROM b
+  LEFT JOIN s ON b.k = s.k
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY b.song
+    ORDER BY (s.album_name IS NOT NULL) DESC
+  ) = 1
+)
+SELECT
+  album_name,
+  COUNT(*) as total_charted_songs,
+  AVG(peak_rank) as avg_peak_rank
+FROM deduped
+GROUP BY album_name
+ORDER BY total_charted_songs DESC
