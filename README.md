@@ -17,7 +17,7 @@ This project investigates four analytical dimensions:
 | File | Description | Source |
 |------|-------------|--------|
 | `billboard_hot100_complete_1958-2025.csv` | Weekly Billboard Hot 100 chart data | Scraped via Python |
-| `spotify_global_2017-2025.csv` | Spotify Global Top 200 weekly rankings | Scraped via Spotify API |
+| `spotify_global_2017-2025.csv` | Spotify Global Top 200 weekly rankings | Downloaded manually week by week and merged + Kaggle |
 | `spotify_top_audio_features.csv` | Audio features (danceability, energy, valence, tempo, etc.) for charted songs | Spotify API |
 | `taylorswift_lyrics_and_sentiment.csv` | Full lyrical analysis including sentiment scores, lexical diversity, imagery counts, structural features | Custom NLP pipeline) |
 
