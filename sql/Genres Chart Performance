@@ -1,0 +1,114 @@
+CREATE TEMP FUNCTION canon_match(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(
+          REGEXP_REPLACE(
+            REGEXP_REPLACE(
+              LOWER(IFNULL(x,'')),
+              r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '
+            ),
+            r'[\(\)\[\]]', ' '
+          ),
+          r'\bminutes\b', ' minute '
+        ),
+        r"(taylor'?s\s+version|\btv\b)", ' '
+      ),
+      r'from\s+the\s+vault', ' '
+    ),
+    r'[^a-z0-9]+', ' '
+  ))
+);
+
+CREATE TEMP FUNCTION join_key(song STRING, artist STRING) AS (
+  CONCAT(canon_match(song), ' | ', canon_match(artist))
+);
+
+WITH b AS (
+  SELECT
+    song,
+    artist,
+    MIN(peak_rank) AS bb_peak_rank,
+    join_key(song, artist) AS k
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
+  GROUP BY song, artist
+),
+sp AS (
+  SELECT
+    song,
+    artist,
+    join_key(song, artist) AS k,
+    MIN(rank) AS sp_peak_rank,
+    ARRAY_AGG(Artist_Genres ORDER BY rank ASC, date ASC LIMIT 1)[OFFSET(0)] AS artist_genres
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
+  GROUP BY song, artist, k
+),
+joined AS (
+  SELECT
+    b.song,
+    b.artist,
+    b.bb_peak_rank,
+    sp.sp_peak_rank,
+    sp.artist_genres
+  FROM b
+  INNER JOIN sp USING (k)
+  WHERE sp.artist_genres IS NOT NULL
+),
+exploded AS (
+  SELECT
+    song,
+    artist,
+    bb_peak_rank,
+    sp_peak_rank,
+    genre
+  FROM joined,
+  UNNEST(ARRAY(
+    SELECT g FROM UNNEST([
+      IF(artist_genres LIKE '%synth-pop%', 'Synth-pop', NULL),
+
+      IF(artist_genres LIKE '%r&b%' OR artist_genres LIKE '%rnb%', 'R&B', NULL),
+      IF(artist_genres LIKE '%hip hop%' OR artist_genres LIKE '%hip-hop%', 'Hip-hop', NULL),
+      IF(artist_genres LIKE '%rap%', 'Rap', NULL),
+
+      -- Latin America buckets
+      IF(artist_genres LIKE '%reggaeton%', 'Reggaeton', NULL),
+      IF(
+        artist_genres LIKE '%latin%'
+        OR artist_genres LIKE '%urbano%'
+        OR artist_genres LIKE '%latino%',
+        'Latin',
+        NULL
+      ),
+
+      -- Funk
+      IF(artist_genres LIKE '%alt%', 'Alt', NULL),
+
+      IF(artist_genres LIKE '%country%', 'Country', NULL),
+      IF(artist_genres LIKE '%folk%', 'Folk', NULL),
+
+      IF(artist_genres LIKE '%pop rock%', 'Pop Rock', NULL),
+      IF(artist_genres LIKE '%rock%', 'Rock', NULL),
+
+      -- Pop last; avoid counting "pop" inside "synth-pop" or "hip-hop"
+      IF(
+        artist_genres LIKE '%pop%'
+        AND artist_genres NOT LIKE '%synth-pop%'
+        AND artist_genres NOT LIKE '%hip-hop%'
+        AND artist_genres NOT LIKE '%hip hop%',
+        'Pop',
+        NULL
+      )
+    ]) AS g
+    WHERE g IS NOT NULL
+  )) AS genre
+)
+SELECT
+  genre,
+  COUNT(DISTINCT CONCAT(artist, '::', song)) AS song_count,
+  ROUND(AVG(bb_peak_rank), 1) AS avg_bb_peak_rank,
+  ROUND(AVG(sp_peak_rank), 1) AS avg_sp_peak_rank,
+  SUM(CASE WHEN bb_peak_rank = 1 THEN 1 ELSE 0 END) AS billboard_n1_songs,
+  SUM(CASE WHEN sp_peak_rank = 1 THEN 1 ELSE 0 END) AS spotify_n1_songs
+FROM exploded
+GROUP BY genre
+ORDER BY song_count DESC;
