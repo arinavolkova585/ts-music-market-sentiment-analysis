@@ -23,7 +23,7 @@ This project investigates four analytical dimensions:
 
 
 ## Tools & Methods
-
+- **Claude Sonnet 4.5; Chat GPT Code Copilot** - vibe-coding assistants with python scraping and SQL complex query debugging 
 - **Python** (pandas, spotipy, requests) — data collection, cleaning, and feature engineering
 - **Google BigQuery (SQL)** — multi-table joins, CTEs, window functions, aggregations
 - **Custom canon() UDF** — regex-based song title normalization for cross-dataset matching
