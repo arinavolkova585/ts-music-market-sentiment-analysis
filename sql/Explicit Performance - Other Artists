@@ -1,0 +1,51 @@
+CREATE TEMP FUNCTION canon(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\([^)]*\)|\[[^\]]*\]', ' '),
+        r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '
+      ),
+      r'[^a-z0-9]+', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+WITH b AS (
+  SELECT
+    song,
+    artist,
+    MIN(peak_rank) AS bb_peak_rank,
+    canon(song) AS k
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
+  GROUP BY song, artist
+),
+sp AS (
+  SELECT
+    canon(song) AS k,
+    MIN(rank) AS sp_peak_rank,
+    MAX(CAST(Explicit AS INT64)) AS explicit_flag
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
+  GROUP BY k
+),
+joined AS (
+  SELECT
+    b.song,
+    b.artist,
+    b.bb_peak_rank,
+    sp.sp_peak_rank,
+    sp.explicit_flag
+  FROM b
+  INNER JOIN sp USING (k)   -- only keep songs where Explicit is known
+)
+SELECT
+  CASE WHEN explicit_flag = 1 THEN 'Explicit' ELSE 'Non-explicit' END AS explicit_group,
+  COUNT(*) AS matched_songs,
+  AVG(bb_peak_rank) AS avg_billboard_peak_rank,
+  AVG(sp_peak_rank) AS avg_spotify_peak_rank,
+  SUM(CASE WHEN bb_peak_rank = 1 THEN 1 ELSE 0 END) AS billboard_N1,
+  SUM(CASE WHEN sp_peak_rank = 1 THEN 1 ELSE 0 END) AS spotify_N1,
+  SUM(CASE WHEN bb_peak_rank < 10 THEN 1 ELSE 0 END) AS billboard_top10,  SUM(CASE WHEN sp_peak_rank < 10 THEN 1 ELSE 0 END) AS spotify_top10,
+FROM joined
+GROUP BY explicit_group
+ORDER BY explicit_group;
