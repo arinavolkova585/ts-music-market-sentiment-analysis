@@ -1,0 +1,36 @@
+CREATE TEMP FUNCTION canon(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\([^)]*\)|\[[^\]]*\]', ' '),
+        r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '
+      ),
+      r'[^a-z0-9]+', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+WITH b AS (
+  SELECT song, MIN(peak_rank) AS peak_rank, COUNT(*) AS total_weeks, canon(song) AS k
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
+  WHERE artist LIKE '%Taylor Swift%'
+  GROUP BY song
+),
+sp_explicit AS (
+  SELECT
+    canon(song) AS k,
+    MAX(CAST(Explicit AS INT64)) AS explicit_flag
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
+  WHERE artist LIKE '%Taylor Swift%'
+  GROUP BY k
+)
+SELECT
+  b.song,
+  b.peak_rank,
+  b.total_weeks,
+  CASE WHEN sp_explicit.explicit_flag = 1 THEN 'Yes' ELSE 'No' END AS is_explicit
+FROM b
+LEFT JOIN sp_explicit USING (k)
+WHERE sp_explicit.explicit_flag IS NOT NULL
+ORDER BY b.peak_rank;
