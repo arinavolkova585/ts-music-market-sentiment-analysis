@@ -1,0 +1,132 @@
+CREATE TEMP FUNCTION canon_match(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(
+          REGEXP_REPLACE(
+            REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '),
+            r'[\(\)\[\]]', ' '
+          ),
+          r'\bminutes\b', ' minute '
+        ),
+        r"(taylor'?s\s+version|\btv\b)", ' '
+      ),
+      r'from\s+the\s+vault', ' '
+    ),
+    r'[^a-z0-9]+', ' '
+  ))
+);
+
+CREATE TEMP FUNCTION join_key(song STRING, artist STRING) AS (
+  CONCAT(canon_match(song), ' | ', canon_match(artist))
+);
+
+WITH b AS (
+  SELECT
+    join_key(song, artist) AS k,
+    ANY_VALUE(artist) AS artist,
+    ANY_VALUE(song) AS song,
+    MIN(peak_rank) AS bb_peak_rank
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
+  GROUP BY k
+),
+sp AS (
+  SELECT
+    join_key(song, artist) AS k,
+    MIN(rank) AS sp_peak_rank
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
+  GROUP BY k
+),
+af AS (
+  -- Deduplicate to 1 audio-features row per key (choose most streams, then most weeks)
+  SELECT
+    k,
+    duration_ms, danceability, energy, valence, tempo, loudness,
+    weeks_on_chart, streams
+  FROM (
+    SELECT
+      join_key(song, artist) AS k,
+      duration_ms, danceability, energy, valence, tempo, loudness,
+      weeks_on_chart, streams,
+      ROW_NUMBER() OVER (
+        PARTITION BY join_key(song, artist)
+        ORDER BY streams DESC, weeks_on_chart DESC
+      ) AS rn
+    FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_top_audio_features`
+  )
+  WHERE rn = 1
+),
+base AS (
+  SELECT
+    b.k,
+    b.artist,
+    b.song,
+    b.bb_peak_rank,
+    sp.sp_peak_rank,
+    af.duration_ms,
+    af.danceability,
+    af.energy,
+    af.valence,
+    af.tempo,
+    af.loudness,
+    af.weeks_on_chart,
+    af.streams
+  FROM b
+  INNER JOIN sp USING (k)
+  INNER JOIN af USING (k)
+),
+segments AS (
+  SELECT 'BB #1' AS segment, * FROM base WHERE bb_peak_rank = 1
+  UNION ALL
+  SELECT 'SP #1' AS segment, * FROM base WHERE sp_peak_rank = 1
+  UNION ALL
+  SELECT 'BB < 10' AS segment, * FROM base WHERE bb_peak_rank < 10
+  UNION ALL
+  SELECT 'BB < 10 AND SP < 10' AS segment, * FROM base WHERE bb_peak_rank < 10 AND sp_peak_rank < 10
+),
+segment_keys AS (
+  SELECT DISTINCT k FROM segments
+),
+non_segment AS (
+  SELECT
+    'Overall (non-segment)' AS segment,
+    COUNT(*) AS n_songs,
+    AVG(duration_ms) AS avg_duration_ms,
+    AVG(danceability) AS avg_danceability,
+    AVG(energy) AS avg_energy,
+    AVG(valence) AS avg_valence,
+    AVG(tempo) AS avg_tempo,
+    AVG(loudness) AS avg_loudness,
+    AVG(weeks_on_chart) AS avg_weeks_on_chart,
+    AVG(streams) AS avg_streams
+  FROM base
+  WHERE k NOT IN (SELECT k FROM segment_keys)
+),
+segment_avgs AS (
+  SELECT
+    segment,
+    COUNT(*) AS n_songs,
+    AVG(duration_ms) AS avg_duration_ms,
+    AVG(danceability) AS avg_danceability,
+    AVG(energy) AS avg_energy,
+    AVG(valence) AS avg_valence,
+    AVG(tempo) AS avg_tempo,
+    AVG(loudness) AS avg_loudness,
+    AVG(weeks_on_chart) AS avg_weeks_on_chart,
+    AVG(streams) AS avg_streams
+  FROM segments
+  GROUP BY segment
+)
+
+SELECT * FROM segment_avgs
+UNION ALL
+SELECT * FROM non_segment
+ORDER BY
+  CASE segment
+    WHEN 'BB #1' THEN 1
+    WHEN 'SP #1' THEN 2
+    WHEN 'BB < 10' THEN 3
+    WHEN 'BB < 10 AND SP < 10' THEN 4
+    WHEN 'Overall (non-segment)' THEN 5
+    ELSE 99
+  END;
