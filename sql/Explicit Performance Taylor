@@ -11,15 +11,21 @@ CREATE TEMP FUNCTION canon(x STRING) AS (
   ))
 );
 
-WITH b AS (
-  SELECT song, MIN(peak_rank) AS peak_rank, COUNT(*) AS total_weeks, canon(song) AS k
+WITH
+billboard AS (
+  SELECT
+    song,
+    canon(song) AS k,
+    MIN(peak_rank) AS peak_rank,
+    COUNT(*) AS total_weeks
   FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
   WHERE artist LIKE '%Taylor Swift%'
-  GROUP BY song
+  GROUP BY song, k
 ),
-sp_explicit AS (
+spotify AS (
   SELECT
     canon(song) AS k,
+    MIN(rank) AS rank, -- best (highest) Spotify position across all weeks
     MAX(CAST(Explicit AS INT64)) AS explicit_flag
   FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
   WHERE artist LIKE '%Taylor Swift%'
@@ -27,10 +33,13 @@ sp_explicit AS (
 )
 SELECT
   b.song,
-  b.peak_rank,
+  s.rank AS spotify_rank,
+  b.peak_rank AS billboard_peak_rank,
   b.total_weeks,
-  CASE WHEN sp_explicit.explicit_flag = 1 THEN 'Yes' ELSE 'No' END AS is_explicit
-FROM b
-LEFT JOIN sp_explicit USING (k)
-WHERE sp_explicit.explicit_flag IS NOT NULL
-ORDER BY b.peak_rank;
+  IF(s.explicit_flag = 1, 'Yes', 'No') AS is_explicit
+FROM billboard b
+LEFT JOIN spotify s
+  ON b.k = s.k
+-- keep this WHERE only if you truly want songs that exist in Spotify
+WHERE s.rank IS NOT NULL
+ORDER BY b.peak_rank, s.rank, b.song;
