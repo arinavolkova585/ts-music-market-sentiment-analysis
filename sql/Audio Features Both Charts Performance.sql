@@ -38,18 +38,35 @@ sp AS (
   GROUP BY k
 ),
 af AS (
-  -- Deduplicate to 1 audio-features row per key (choose most streams, then most weeks)
   SELECT
     k,
-    danceability, energy, speechiness, acousticness, instrumentalness,
-    liveness, valence, loudness, tempo, duration_ms,
-    weeks_on_chart, streams
+    danceability,
+    energy,
+    speechiness,
+    acousticness,
+    instrumentalness,
+    liveness,
+    valence,
+    loudness,
+    tempo,
+    duration_ms,
+    weeks_on_chart,
+    streams
   FROM (
     SELECT
       join_key(song, artist) AS k,
-      danceability, energy, speechiness, acousticness, instrumentalness,
-      liveness, valence, loudness, tempo, duration_ms,
-      weeks_on_chart, streams,
+      danceability,
+      energy,
+      speechiness,
+      acousticness,
+      instrumentalness,
+      liveness,
+      valence,
+      loudness,
+      tempo,
+      duration_ms,
+      weeks_on_chart,
+      streams,
       ROW_NUMBER() OVER (
         PARTITION BY join_key(song, artist)
         ORDER BY streams DESC, weeks_on_chart DESC
@@ -58,12 +75,13 @@ af AS (
   )
   WHERE rn = 1
 )
+
 SELECT
   b.artist,
   b.song,
   b.bb_peak_rank,
   sp.sp_peak_rank,
-  af.duration_ms,
+  ROUND(af.duration_ms / 60000.0, 2) AS duration_min,
   af.danceability,
   af.energy,
   af.valence,
@@ -72,6 +90,6 @@ SELECT
   af.weeks_on_chart,
   af.streams
 FROM b
-INNER JOIN sp USING (k)     -- equivalent to your LEFT JOIN + WHERE sp.sp_peak_rank IS NOT NULL
-INNER JOIN af USING (k)     -- equivalent to LEFT JOIN + WHERE af.duration_ms IS NOT NULL
+INNER JOIN sp USING (k)
+INNER JOIN af USING (k)
 ORDER BY b.bb_peak_rank;
