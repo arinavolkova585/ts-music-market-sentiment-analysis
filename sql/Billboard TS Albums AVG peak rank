@@ -19,7 +19,7 @@ WITH b AS (
 ), 
 s AS (
   SELECT song, album_name, canon(song) AS k 
-  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.taylorswift_lyrics_and_sentiment_analysis`
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.taylorswift_lyrics_and_sentiment`
 ),
 deduped AS (
   SELECT
