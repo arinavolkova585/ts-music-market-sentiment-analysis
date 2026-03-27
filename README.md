@@ -41,13 +41,12 @@ This analysis investigates four core dimensions:
 
 - **Python (pandas, requests, spotipy)** — data collection, cleaning, feature engineering  
 - **BigQuery (SQL)** — joins, aggregations, correlation analysis  
-- **Custom NLP pipeline** — sentiment scoring using RoBERTa + manual validation (~18% human-in-the-loop adjusted for context) :contentReference[oaicite:0]{index=0}  
+- **Custom NLP pipeline** — sentiment scoring using RoBERTa + manual validation (~18% human-in-the-loop adjusted for context) 
 - **Regex-based canonicalization (UDF)** — cross-dataset song matching  
 
 ### Important note:
 This project prioritizes **analytical accuracy over automation**.  
-Sentiment scores were manually reviewed and adjusted where models failed to capture context (e.g., metaphor, irony, nostalgia). :contentReference[oaicite:1]{index=1}  
-
+Sentiment scores were manually reviewed and adjusted where models failed to capture context (e.g., metaphor, irony, nostalgia). 
 
 ---
 
