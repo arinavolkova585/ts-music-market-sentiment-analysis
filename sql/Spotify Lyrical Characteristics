@@ -1,0 +1,201 @@
+CREATE TEMP FUNCTION canon_song(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '),
+      r'[^a-z0-9]+', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+CREATE TEMP FUNCTION canon_album(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'[^a-z0-9]+', ' '),
+    r'\s+', ' '
+  ))
+);
+
+WITH sp_album_stats AS (
+  SELECT
+    song,
+    artist,
+    album_name,
+    canon_song(song) AS song_k,
+    canon_album(album_name) AS album_k,
+    COUNT(*) AS rows_in_album,
+    MIN(date) AS first_date,
+    MIN(rank) AS sp_peak_rank_in_album
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
+  WHERE artist LIKE '%Taylor Swift%'
+  GROUP BY song, artist, album_name, song_k, album_k
+),
+sp_best_album AS (
+  SELECT
+    song,
+    artist,
+    album_name,
+    song_k,
+    album_k,
+    sp_peak_rank_in_album AS sp_peak_rank,
+    rows_in_album AS sp_total_weeks
+  FROM sp_album_stats
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY artist, song
+    ORDER BY rows_in_album DESC, first_date ASC, sp_peak_rank_in_album ASC
+  ) = 1
+),
+
+s AS (
+  SELECT
+    song,
+    album_name,
+    date,
+    artist,
+
+    `Sentiment` AS sentiment,
+    `Sentiment Score` AS sentiment_score,
+    `Sentiment Score _Old_` AS sentiment_score_old,
+    Adjusted,
+    `Explicitness ` AS explicitness,
+    `Featured Artist` AS featured_artist,
+    `Featured Artist 2` AS featured_artist_2,
+
+    `Chorus Words` AS chorus_words,
+    Intro,
+    Outro,
+    Bridge,
+    `Pre-Chorus` AS pre_chorus,
+
+    `Color Words` AS colour_words,
+    `Nature Words` AS nature_words,
+    `Body Parts` AS body_parts,
+    `Temporal Words` AS temporal_words,
+    `Temporal Density` AS temporal_density,
+
+    `Total Words` AS total_words,
+    `Unique Words` AS unique_words,
+    `Lexical Diversity` AS lexical_diversity,
+    `Average Word Length` AS avg_word_length,
+
+    `You Count` AS you_count,
+    `We Count` AS we_count,
+    `I Count` AS i_count,
+    `You Ratio` AS you_ratio,
+    `We Ratio` AS we_ratio,
+    `I Ratio` AS i_ratio,
+    `Dominant Pronoun` AS dominant_pronoun,
+
+    canon_song(song) AS song_k,
+    canon_album(album_name) AS album_k
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.taylorswift_lyrics_and_sentiment`
+),
+
+joined AS (
+  SELECT
+    sp.song,
+    sp.album_name,
+    sp.artist,
+    sp.sp_peak_rank,
+    sp.sp_total_weeks,
+
+    s.date,
+    s.sentiment,
+    s.sentiment_score,
+
+    s.sentiment_score_old,
+    s.adjusted,
+    s.explicitness,
+    s.featured_artist,
+    s.featured_artist_2,
+    s.chorus_words,
+
+    -- boolean -> ordered labels for Looker Studio
+    CASE
+      WHEN s.intro = TRUE THEN 'Has Intro'
+      WHEN s.intro = FALSE THEN 'No Intro'
+      ELSE NULL
+    END AS intro_label,
+
+    CASE
+      WHEN s.outro = TRUE THEN 'Has Outro'
+      WHEN s.outro = FALSE THEN 'No Outro'
+      ELSE NULL
+    END AS outro_label,
+
+    CASE
+      WHEN s.bridge = TRUE THEN 'Has Bridge'
+      WHEN s.bridge = FALSE THEN 'No Bridge'
+      ELSE NULL
+    END AS bridge_label,
+
+    CASE
+      WHEN s.pre_chorus = TRUE THEN 'Has Pre-Chorus'
+      WHEN s.pre_chorus = FALSE THEN 'No Pre-Chorus'
+      ELSE NULL
+    END AS pre_chorus_label,
+
+    s.colour_words,
+    s.nature_words,
+    s.body_parts,
+    s.temporal_words,
+    s.temporal_density,
+    s.total_words,
+    s.unique_words,
+    s.lexical_diversity,
+    s.avg_word_length,
+    s.you_count,
+    s.we_count,
+    s.i_count,
+    s.you_ratio,
+    s.we_ratio,
+    s.i_ratio,
+    s.dominant_pronoun
+  FROM sp_best_album sp
+  LEFT JOIN s
+    ON sp.song_k = s.song_k
+   AND sp.album_k = s.album_k
+)
+
+SELECT
+  song,
+  album_name,
+  date,
+  artist,
+  sentiment_score,
+
+  sp_peak_rank,
+  sp_total_weeks,
+
+  sentiment,
+  sentiment_score_old,
+  adjusted,
+  explicitness,
+  featured_artist,
+  featured_artist_2,
+  chorus_words,
+
+ 
+  intro_label,
+  outro_label,
+  bridge_label,
+  pre_chorus_label,
+
+  colour_words,
+  nature_words,
+  body_parts,
+  temporal_words,
+  temporal_density,
+  total_words,
+  unique_words,
+  lexical_diversity,
+  avg_word_length,
+  you_count,
+  we_count,
+  i_count,
+  you_ratio,
+  we_ratio,
+  i_ratio,
+  dominant_pronoun
+FROM joined
+WHERE sentiment_score IS NOT NULL
+ORDER BY sp_peak_rank, sp_total_weeks DESC, song;
