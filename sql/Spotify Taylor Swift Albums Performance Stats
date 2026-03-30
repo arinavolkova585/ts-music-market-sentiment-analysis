@@ -1,0 +1,63 @@
+CREATE TEMP FUNCTION canon_song(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '),
+      r'[^a-z0-9]+', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+WITH tracks AS (
+  -- “All songs” per album (includes tracks that never charted)
+  SELECT
+    album_name,
+    song,
+    canon_song(song) AS song_k
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.taylorswift_lyrics_and_sentiment`
+  WHERE album_name IS NOT NULL
+),
+sp_song AS (
+  -- collapse Spotify chart rows -> song-level metrics
+  SELECT
+    canon_song(song) AS song_k,
+    canon_song(album_name) AS album_k, -- optional (helps if same song name exists across albums)
+    MIN(rank) AS peak_rank,
+    COUNT(*) AS weeks_charted,
+    SUM(streams) AS total_streams
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
+  WHERE LOWER(artist) LIKE '%taylor swift%'
+  GROUP BY song_k, album_k
+),
+joined AS (
+  SELECT
+    t.album_name,
+    t.song,
+    s.peak_rank,
+    s.weeks_charted,
+    s.total_streams
+  FROM tracks t
+  LEFT JOIN sp_song s
+    ON t.song_k = s.song_k
+    -- if you trust album naming, this reduces collisions:
+    -- AND canon_song(t.album_name) = s.album_k
+)
+
+SELECT
+  album_name,
+  COUNT(*) AS total_tracks,
+  COUNTIF(peak_rank IS NOT NULL) AS charted_tracks,
+  COUNTIF(peak_rank IS NULL) AS uncharted_tracks,
+
+  ROUND(AVG(peak_rank), 2) AS avg_peak_rank_charted,
+
+  -- penalize uncharted tracks so albums with lots of non-charting songs don’t look “too good”
+  ROUND(AVG(COALESCE(peak_rank, 201)), 2) AS avg_peak_rank_with_penalty,
+
+  SUM(COALESCE(weeks_charted, 0)) AS total_weeks_charted,
+  ROUND(AVG(COALESCE(weeks_charted, 0)), 2) AS avg_weeks_charted_per_track,
+
+  SUM(COALESCE(total_streams, 0)) AS total_streams
+FROM joined
+GROUP BY album_name
+ORDER BY charted_tracks DESC, avg_peak_rank_with_penalty ASC;
