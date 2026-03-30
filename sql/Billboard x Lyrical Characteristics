@@ -1,0 +1,152 @@
+CREATE TEMP FUNCTION canon(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\([^)]*\)|\[[^\]]*\]', ' '),
+        r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '
+      ),
+      r'[^a-z0-9]+', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+WITH b AS (
+  SELECT
+    song,
+    artist,
+    MIN(peak_rank) AS peak_rank,
+    COUNT(*) AS total_weeks,
+    canon(song) AS k
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
+  WHERE artist LIKE '%Taylor Swift%'
+  GROUP BY song, artist
+),
+
+s AS (
+  SELECT
+    song,
+    album_name,
+    date,
+    artist,
+
+    `Sentiment` AS sentiment,
+    `Sentiment Score` AS sentiment_score,
+    `Sentiment Score _Old_` AS sentiment_score_old,
+    Adjusted AS adjusted,
+    `Explicitness ` AS explicitness,
+    `Featured Artist` AS featured_artist,
+    `Featured Artist 2` AS featured_artist_2,
+
+    `Chorus Words` AS chorus_words,
+
+    -- raw booleans (kept for ranking / debugging)
+    Intro AS intro_bool,
+    Outro AS outro_bool,
+    Bridge AS bridge_bool,
+    `Pre-Chorus` AS pre_chorus_bool,
+
+    -- ✅ labels for Looker Studio bar charts
+    CASE
+      WHEN Intro = TRUE THEN 'Has Intro'
+      WHEN Intro = FALSE THEN 'No Intro'
+      ELSE NULL
+    END AS intro_label,
+
+    CASE
+      WHEN Outro = TRUE THEN 'Has Outro'
+      WHEN Outro = FALSE THEN 'No Outro'
+      ELSE NULL
+    END AS outro_label,
+
+    CASE
+      WHEN Bridge = TRUE THEN 'Has Bridge'
+      WHEN Bridge = FALSE THEN 'No Bridge'
+      ELSE NULL
+    END AS bridge_label,
+
+    CASE
+      WHEN `Pre-Chorus` = TRUE THEN 'Has Pre-Chorus'
+      WHEN `Pre-Chorus` = FALSE THEN 'No Pre-Chorus'
+      ELSE NULL
+    END AS pre_chorus_label,
+
+    `Color Words` AS colour_words,
+    `Nature Words` AS nature_words,
+    `Body Parts` AS body_parts,
+    `Temporal Words` AS temporal_words,
+    `Temporal Density` AS temporal_density,
+
+    `Total Words` AS total_words,
+    `Unique Words` AS unique_words,
+    `Lexical Diversity` AS lexical_diversity,
+    `Average Word Length` AS avg_word_length,
+
+    `You Count` AS you_count,
+    `We Count` AS we_count,
+    `I Count` AS i_count,
+    `You Ratio` AS you_ratio,
+    `We Ratio` AS we_ratio,
+    `I Ratio` AS i_ratio,
+    `Dominant Pronoun` AS dominant_pronoun,
+
+    canon(song) AS k
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.taylorswift_lyrics_and_sentiment`
+)
+
+SELECT
+  b.song,
+  b.artist,
+  b.peak_rank,
+  b.total_weeks,
+
+  s.album_name,
+  s.date,
+
+  s.sentiment,
+  s.sentiment_score,
+
+  -- features you asked for
+  s.intro_label,
+  s.outro_label,
+  s.pre_chorus_label,
+  s.bridge_label,
+
+  -- keep any extra fields you want in Looker
+  s.chorus_words,
+  s.explicitness,
+  s.featured_artist,
+  s.featured_artist_2,
+  s.total_words,
+  s.unique_words,
+  s.lexical_diversity,
+  s.avg_word_length,
+  s.dominant_pronoun,
+  s.colour_words,
+  s.nature_words,
+  s.body_parts,
+  s.temporal_words,
+  s.temporal_density
+
+FROM b
+LEFT JOIN s
+  ON b.k = s.k
+
+-- ✅ critical: pick ONE best sentiment row per Billboard song so no duplicates + no missing songs
+QUALIFY ROW_NUMBER() OVER (
+  PARTITION BY b.song, b.artist
+  ORDER BY
+    (b.k = s.k) DESC,
+    (s.sentiment_score IS NOT NULL) DESC,
+    (s.sentiment IS NOT NULL) DESC,
+    (s.album_name IS NOT NULL) DESC,
+    (s.date IS NOT NULL) DESC,
+    -- prefer rows that actually have these feature flags filled
+    (s.intro_bool IS NOT NULL) DESC,
+    (s.outro_bool IS NOT NULL) DESC,
+    (s.pre_chorus_bool IS NOT NULL) DESC,
+    (s.bridge_bool IS NOT NULL) DESC,
+    LENGTH(IFNULL(s.song, '')) DESC
+) = 1
+
+ORDER BY b.peak_rank, b.total_weeks DESC, b.song;
