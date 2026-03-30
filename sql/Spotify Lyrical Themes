@@ -1,57 +1,94 @@
-CREATE TEMP FUNCTION canon(x STRING) AS (
+-- BigQuery Standard SQL
+
+CREATE TEMP FUNCTION canon_song(x STRING) AS (
   TRIM(REGEXP_REPLACE(
     REGEXP_REPLACE(
-      REGEXP_REPLACE(
-        REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\([^)]*\)|\[[^\]]*\]', ' '),
-        r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '
-      ),
+      REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '),
       r'[^a-z0-9]+', ' '
     ),
     r'\s+', ' '
   ))
 );
 
-WITH sp AS (
-  SELECT song, artist, MIN(rank) AS sp_peak_rank, COUNT(*) AS sp_total_weeks, canon(song) AS k 
+CREATE TEMP FUNCTION canon_album(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'[^a-z0-9]+', ' '),
+    r'\s+', ' '
+  ))
+);
+
+WITH sp_album_stats AS (
+  SELECT
+    song,
+    artist,
+    album_name,
+    canon_song(song) AS song_k,
+    canon_album(album_name) AS album_k,
+    COUNT(*) AS rows_in_album,
+    MIN(date) AS first_date,
+    MAX(date) AS last_date,
+    MIN(rank) AS sp_peak_rank_in_album
   FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
   WHERE artist LIKE '%Taylor Swift%'
-  GROUP BY song, artist
-), 
+  GROUP BY song, artist, album_name, song_k, album_k
+),
+sp_best_album AS (
+  SELECT
+    song,
+    artist,
+    album_name,
+    song_k,
+    album_k,
+    sp_peak_rank_in_album AS sp_peak_rank,
+    rows_in_album AS sp_total_weeks
+  FROM sp_album_stats
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY artist, song
+    ORDER BY rows_in_album DESC, first_date ASC, sp_peak_rank_in_album ASC
+  ) = 1
+),
 s AS (
-  SELECT song, album_name, `Color Words` AS colour_words,
-    `Nature Words` AS nature_words, `Total Words` AS total_words,
-    `Unique Words` AS unique_words, `Dominant Pronoun` AS dominant_pronoun, `Body Parts` AS body_parts,
-    canon(song) AS k 
+  SELECT
+    song,
+    album_name,
+    `Color Words` AS colour_words,
+    `Nature Words` AS nature_words,
+    `Total Words` AS total_words,
+    `Unique Words` AS unique_words,
+    `Dominant Pronoun` AS dominant_pronoun,
+    `Body Parts` AS body_parts,
+    canon_song(song) AS song_k,
+    canon_album(album_name) AS album_k
   FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.taylorswift_lyrics_and_sentiment`
 ),
-deduped AS (
+joined AS (
   SELECT
     sp.song,
+    sp.artist,
+    sp.album_name,
     sp.sp_peak_rank,
     sp.sp_total_weeks,
-    s.album_name, 
-    s.colour_words, 
-    s.nature_words, 
-    s.total_words, 
-    s.unique_words, 
+    s.colour_words,
+    s.nature_words,
+    s.total_words,
+    s.unique_words,
     s.dominant_pronoun,
     s.body_parts
-  FROM sp
-  LEFT JOIN s ON sp.k = s.k
-  QUALIFY ROW_NUMBER() OVER (
-    PARTITION BY sp.song
-    ORDER BY (s.album_name IS NOT NULL) DESC
-  ) = 1
+  FROM sp_best_album sp
+  LEFT JOIN s
+    ON sp.song_k = s.song_k
+   AND sp.album_k = s.album_k
 )
-SELECT 
-  song, 
+SELECT
+  song,
   album_name,
   sp_peak_rank,
   sp_total_weeks,
-  colour_words, 
-  nature_words, 
+  colour_words,
+  nature_words,
   total_words,
   body_parts
-FROM deduped
-WHERE colour_words > 10 OR nature_words > 10 OR body_parts > 10
-ORDER BY sp_peak_rank
+FROM joined
+WHERE colour_words IS NOT NULL
+  AND (colour_words > 10 OR nature_words > 10 OR body_parts > 10)
+ORDER BY sp_peak_rank, sp_total_weeks DESC, song;
