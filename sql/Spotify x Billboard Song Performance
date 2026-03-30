@@ -1,0 +1,72 @@
+CREATE TEMP FUNCTION canon_title(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\([^)]*\)|\[[^\]]*\]', ' '),
+        r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '
+      ),
+      r'[^a-z0-9]+', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+CREATE TEMP FUNCTION canon_artist(x STRING) AS (
+  -- Normalize common artist separators + featuring noise
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\([^)]*\)|\[[^\]]*\]', ' '),
+        r'\b(feat\.?|ft\.?|featuring|with)\b.*$', ' '
+      ),
+      r'\b(and|x|&)\b', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+WITH b AS (
+  SELECT
+    song,
+    artist,
+    MIN(peak_rank) AS peak_rank,
+    COUNT(*) AS total_weeks,
+    canon_title(song) AS k_song,
+    canon_artist(artist) AS k_artist
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
+  GROUP BY song, artist, k_song, k_artist
+),
+sp AS (
+  SELECT
+    song,
+    artist,
+    MIN(rank) AS sp_peak_rank,
+    COUNT(*) AS sp_total_weeks,
+    canon_title(song) AS k_song,
+    canon_artist(artist) AS k_artist
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
+  GROUP BY song, artist, k_song, k_artist
+),
+matched AS (
+  SELECT
+    b.song,
+    b.artist,
+    b.peak_rank,
+    b.total_weeks,
+    sp.sp_peak_rank,
+    sp.sp_total_weeks
+  FROM b
+  JOIN sp
+    ON b.k_song = sp.k_song
+   AND b.k_artist = sp.k_artist
+)
+SELECT
+  song,
+  artist,
+  peak_rank,
+  total_weeks,
+  sp_peak_rank,
+  sp_total_weeks,
+  sp_peak_rank - peak_rank AS us_vs_global_divergence
+FROM matched
+ORDER BY peak_rank, sp_peak_rank, song, artist;
