@@ -1,0 +1,133 @@
+CREATE TEMP FUNCTION canon_base(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\([^)]*\)|\[[^\]]*\]', ' '),
+        r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '
+      ),
+      r'[^a-z0-9]+', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+CREATE TEMP FUNCTION canon_key(x STRING) AS (
+  CONCAT(
+    canon_base(x),
+    IF(
+      REGEXP_CONTAINS(
+        LOWER(IFNULL(x,'')),
+        r'\b((10|ten)[-\s]*(minute|minutes|min|mins))\b'
+      ),
+      ' 10 minute version',
+      ''
+    )
+  )
+);
+
+WITH b AS (
+  SELECT
+    song,
+    artist,
+    MIN(peak_rank) AS peak_rank,
+    COUNT(*) AS total_weeks,
+    canon_key(song) AS k
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
+  WHERE LOWER(artist) LIKE '%taylor swift%'
+  GROUP BY song, artist, k
+),
+
+s AS (
+  SELECT
+    song,
+    `Sentiment` AS sentiment,
+    `Sentiment Score` AS sentiment_score,
+    album_name,
+    canon_key(song) AS k,
+
+    CASE WHEN Intro = TRUE THEN 'Has Intro'
+         WHEN Intro = FALSE THEN 'No Intro'
+         ELSE NULL END AS intro_label,
+
+    CASE WHEN Outro = TRUE THEN 'Has Outro'
+         WHEN Outro = FALSE THEN 'No Outro'
+         ELSE NULL END AS outro_label,
+
+    CASE WHEN `Pre-Chorus` = TRUE THEN 'Has Pre-Chorus'
+         WHEN `Pre-Chorus` = FALSE THEN 'No Pre-Chorus'
+         ELSE NULL END AS pre_chorus_label,
+
+    CASE WHEN Bridge = TRUE THEN 'Has Bridge'
+         WHEN Bridge = FALSE THEN 'No Bridge'
+         ELSE NULL END AS bridge_label
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.taylorswift_lyrics_and_sentiment`
+),
+
+sp_peak AS (
+  SELECT
+    canon_key(song) AS k,
+    MIN(rank) AS sp_peak_rank,
+    (ARRAY_AGG(`Track_Number_On_Album` IGNORE NULLS ORDER BY rank ASC, date ASC LIMIT 1))[OFFSET(0)]
+      AS track_number_on_album
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
+  WHERE LOWER(artist) LIKE '%taylor swift%'
+  GROUP BY k
+),
+
+af AS (
+  SELECT
+    k,
+    tempo,
+    energy
+  FROM (
+    SELECT
+      canon_key(song) AS k,
+      tempo,
+      energy,
+      ROW_NUMBER() OVER (
+        PARTITION BY canon_key(song)
+        ORDER BY streams DESC, weeks_on_chart DESC
+      ) AS rn
+    FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_top_audio_features`
+    WHERE LOWER(artist) LIKE '%taylor swift%'
+  )
+  WHERE rn = 1
+)
+
+SELECT
+  b.song,
+  b.artist,
+  b.peak_rank,
+  b.total_weeks,
+
+  s.sentiment,
+  s.sentiment_score,
+  s.album_name,
+
+  sp.sp_peak_rank,
+  sp.track_number_on_album,
+
+  af.tempo,
+  af.energy,
+
+  s.intro_label,
+  s.outro_label,
+  s.pre_chorus_label,
+  s.bridge_label
+FROM b
+LEFT JOIN s  ON b.k = s.k
+LEFT JOIN sp_peak sp ON b.k = sp.k
+LEFT JOIN af ON b.k = af.k
+
+-- one output row per Billboard song+artist (never drops Billboard rows)
+QUALIFY ROW_NUMBER() OVER (
+  PARTITION BY b.song, b.artist
+  ORDER BY
+    (s.sentiment_score IS NOT NULL) DESC,
+    (s.album_name IS NOT NULL) DESC,
+    (sp.sp_peak_rank IS NOT NULL) DESC,
+    (af.tempo IS NOT NULL) DESC,
+    LENGTH(IFNULL(s.song, '')) DESC
+) = 1
+
+ORDER BY b.peak_rank, b.total_weeks DESC, b.song;
