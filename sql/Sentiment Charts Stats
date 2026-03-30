@@ -1,0 +1,86 @@
+CREATE TEMP FUNCTION canon(x STRING) AS (
+  TRIM(REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(
+        REGEXP_REPLACE(LOWER(IFNULL(x,'')), r'\([^)]*\)|\[[^\]]*\]', ' '),
+        r'\b(feat\.?|ft\.?|featuring)\b.*$', ' '
+      ),
+      r'[^a-z0-9]+', ' '
+    ),
+    r'\s+', ' '
+  ))
+);
+
+WITH billboard_song AS (
+  SELECT
+    song,
+    artist,
+    canon(song) AS k,
+    MIN(peak_rank) AS billboard_peak_rank,
+    COUNT(*) AS billboard_total_weeks
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.billboard_hot100_1958_2025`
+  WHERE artist LIKE '%Taylor Swift%'
+  GROUP BY song, artist, k
+),
+
+sentiment_one AS (
+  SELECT
+    canon(song) AS k,
+    CASE
+      WHEN LOWER(`Sentiment`) IN ('positive','negative','neutral')
+        THEN INITCAP(LOWER(`Sentiment`))
+      ELSE NULL
+    END AS sentiment
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.taylorswift_lyrics_and_sentiment`
+  QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY canon(song)
+    ORDER BY
+      (`Sentiment Score` IS NOT NULL) DESC,
+      (`Sentiment` IS NOT NULL) DESC,
+      (album_name IS NOT NULL) DESC,
+      (date IS NOT NULL) DESC,
+      LENGTH(IFNULL(song, '')) DESC
+  ) = 1
+),
+
+spotify_song AS (
+  SELECT
+    canon(song) AS k,
+    MIN(rank) AS spotify_peak_rank,
+    COUNT(DISTINCT DATE_TRUNC(DATE(date), WEEK(MONDAY))) AS spotify_total_weeks
+  FROM `ts-sentiment-and-charts.ts_sentiment_and_charts.spotify_global_2017-2025`
+  WHERE artist LIKE '%Taylor Swift%'
+  GROUP BY k
+),
+
+song_facts AS (
+  SELECT
+    COALESCE(sen.sentiment, 'Unknown') AS sentiment,
+    b.song,
+    b.artist,
+    b.billboard_peak_rank,
+    b.billboard_total_weeks,
+    sp.spotify_peak_rank,
+    sp.spotify_total_weeks
+  FROM billboard_song b
+  LEFT JOIN sentiment_one sen
+    ON b.k = sen.k
+  LEFT JOIN spotify_song sp
+    ON b.k = sp.k
+)
+
+SELECT
+  sentiment,
+
+  AVG(billboard_total_weeks) AS billboard_avg_total_weeks,
+  AVG(billboard_peak_rank)  AS billboard_avg_peak_rank,
+
+  AVG(spotify_total_weeks)  AS spotify_avg_total_weeks,
+  AVG(spotify_peak_rank)    AS spotify_avg_peak_rank,
+
+  COUNT(*) AS songs_in_bucket,
+  COUNTIF(spotify_total_weeks IS NOT NULL) AS songs_with_spotify
+FROM song_facts
+WHERE sentiment IN ('Positive', 'Negative', 'Neutral')
+GROUP BY sentiment
+ORDER BY sentiment;
